@@ -18,7 +18,7 @@ Install [Node.js](https://nodejs.org) (LTS version) and [Git](https://git-scm.co
 
 ### 2. Download and install
 ```
-git clone https://github.com/YOUR-USERNAME/Redact.git
+git clone https://github.com/SkypMine-max/-Redact
 cd Redact
 npm install
 ```
