@@ -2,7 +2,7 @@
 
 - Delete your own Discord and Instagram messages and reactions from a desktop app.
 - Only works with these apps, others apps gives you a hard time and if you have something that needs bulk deletion change your usernames, transfer emails to a @onionmail and leave it to be deleted
-- made by using claud
+- made using claud
 
 ## Features
 - Delete your own messages or remove your own reactions
