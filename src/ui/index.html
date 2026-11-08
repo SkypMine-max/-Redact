@@ -1,0 +1,127 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https://cdn.discordapp.com data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Redact</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;font:14px -apple-system,system-ui,sans-serif;background:#1e1f22;color:#dbdee1}
+#left{width:380px;border-right:1px solid #2b2d31;display:flex;flex-direction:column}
+#right{flex:1;min-width:0;padding:16px;display:flex;flex-direction:column;gap:10px}
+.bar{padding:10px;display:flex;gap:6px;border-bottom:1px solid #2b2d31}
+.pl,.tab{flex:1;padding:7px;border:0;border-radius:6px;background:#2b2d31;color:inherit;cursor:pointer}.on{background:#5865f2!important;color:#fff}
+.pl i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+input[type=text],input[type=number]{width:100%;padding:7px;border-radius:6px;border:1px solid #3a3c42;background:#111214;color:inherit}
+#list{flex:1;overflow:auto}
+.row{display:flex;align-items:center;gap:10px;padding:7px 12px;cursor:pointer}.row:hover{background:#2b2d31}
+.av{width:30px;height:30px;border-radius:50%;background:#5865f2;display:grid;place-items:center;flex:none;overflow:hidden;font-weight:600;color:#fff}.av img{width:100%;height:100%}
+.nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+button{padding:8px 16px;border:0;border-radius:6px;cursor:pointer;color:#fff;background:#5865f2}button.grey{background:#3a3c42}button:disabled{opacity:.4}
+#log{flex:1;overflow:auto;background:#111214;border-radius:6px;padding:8px;font-size:12px;user-select:text}
+.ln{display:block}.scan{color:#23a55a}.del{color:#f23f43;font-weight:600}
+#manualPrompt{display:none;color:#ff3038;font-size:28px;font-weight:900;letter-spacing:1px;text-align:center;padding:12px 8px;border:2px solid #ff3038;border-radius:8px;background:#2a1113}
+h2{margin:0;font-size:16px}.dim{opacity:.7}
+</style>
+<div id="left">
+  <div class="bar"><button class="pl on" data-p="discord"><i></i>Discord</button><button class="pl" data-p="instagram"><i></i>Instagram</button></div>
+  <div class="bar" id="tabs"></div>
+  <div class="bar"><input type="text" id="q" placeholder="Search..."><button class="grey" id="all">All</button></div>
+  <div id="list"></div>
+</div>
+<div id="right">
+  <h2 id="title">Delete my messages</h2>
+  <div style="display:flex;gap:16px"><label><input type="radio" name="mode" value="messages" checked> Delete my messages</label><label><input type="radio" name="mode" value="reactions"> Remove my reactions</label></div>
+  <div class="dim" id="who"></div>
+  <div id="sum">Nothing selected.</div>
+  <label><input type="checkbox" id="dry" checked> Dry run (only count, change nothing)</label>
+  <div style="display:flex;gap:10px"><label style="flex:1">Only older than (days, optional)<input type="number" id="days" min="0"></label>
+  <label style="flex:1">Only containing text (optional)<input type="text" id="kw"></label></div>
+  <div><button id="go">Start</button> <button class="grey" id="stop" disabled>Stop</button></div>
+  <div id="stats" class="dim"></div>
+  <div id="manualPrompt" role="status" aria-live="polite"></div>
+  <div id="log"></div>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+const NAME = { discord: "Discord", instagram: "Instagram" };
+const S = { discord: { on: false, data: null, sel: new Map(), tab: 0 }, instagram: { on: false, data: null, sel: new Map(), tab: 0 } };
+let cur = "discord", busy = false, runP = null;
+const key = (t) => t.kind + t.id;
+const mode = () => document.querySelector('input[name="mode"]:checked').value;
+let runMode = "messages";
+document.querySelectorAll('input[name="mode"]').forEach((r) => r.onchange = () => { $("#title").textContent = mode() === "reactions" ? "Remove my reactions" : "Delete my messages"; });
+const log = (t, cls) => {
+  const l = $("#log"), d = document.createElement("div"); d.className = "ln" + (cls ? " " + cls : ""); d.textContent = t; l.append(d);
+  while (l.childElementCount > 3000) l.firstChild.remove(); // keep the console light
+  l.scrollTop = l.scrollHeight;
+};
+const items = () => { const s = S[cur]; const q = $("#q").value.toLowerCase(); return (s.data ? s.data.groups[s.tab].items : []).filter((t) => t.name.toLowerCase().includes(q)); };
+
+function render() {
+  document.querySelectorAll(".pl").forEach((b) => { b.classList.toggle("on", b.dataset.p === cur); b.querySelector("i").style.background = S[b.dataset.p].on ? "#23a55a" : "#80848e"; });
+  const s = S[cur], list = $("#list"), tabs = $("#tabs"); list.textContent = ""; tabs.textContent = "";
+  $("#who").textContent = s.data ? `${NAME[cur]}: logged in as ${s.data.me}. Closing the app logs you out and wipes local data.` : NAME[cur];
+  if (!s.on) {
+    const d = document.createElement("div"); d.style.padding = "16px"; d.textContent = `Not connected to ${NAME[cur]}.`;
+    const b = document.createElement("button"); b.textContent = "Log in to " + NAME[cur]; b.style.display = "block"; b.style.marginTop = "10px"; b.onclick = () => cleaner.connect(cur);
+    d.append(b); list.append(d); return summary();
+  }
+  if (!s.data) { list.textContent = "Loading..."; return summary(); }
+  s.data.groups.forEach((g, i) => {
+    const b = document.createElement("button"); b.className = "tab" + (i === s.tab ? " on" : ""); b.textContent = g.label;
+    b.onclick = () => { s.tab = i; render(); }; tabs.append(b);
+  });
+  for (const t of items()) {
+    const row = document.createElement("label"); row.className = "row";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = s.sel.has(key(t)); cb.disabled = busy;
+    cb.onchange = () => { cb.checked ? s.sel.set(key(t), t) : s.sel.delete(key(t)); summary(); };
+    const av = document.createElement("div"); av.className = "av";
+    if (t.icon) { const i = document.createElement("img"); i.src = t.icon; av.append(i); } else av.textContent = t.name.slice(0, 1).toUpperCase();
+    const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = t.name;
+    row.append(cb, av, nm); list.append(row);
+  }
+  summary();
+}
+function summary() {
+  const v = [...S[cur].sel.values()];
+  $("#sum").textContent = v.length ? `Selected: ${v.length} chat(s)/server(s) on ${NAME[cur]}.` : "Nothing selected.";
+}
+const loading = {};
+function load(p) {
+  if (loading[p] || S[p].data) return;
+  loading[p] = true;
+  cleaner.targets(p).then((d) => { S[p].data = d; S[p].tab = 0; if (cur === p) render(); })
+    .catch((e) => log(`${NAME[p]}: couldn't load chats: ${String(e.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, "")}`))
+    .finally(() => { loading[p] = false; });
+}
+document.querySelectorAll(".pl").forEach((b) => b.onclick = () => { cur = b.dataset.p; render(); });
+$("#q").oninput = render;
+$("#all").onclick = () => {
+  const v = items(), s = S[cur], every = v.length && v.every((t) => s.sel.has(key(t)));
+  v.forEach((t) => every ? s.sel.delete(key(t)) : s.sel.set(key(t), t)); render();
+};
+function setBusy(b) { busy = b; $("#go").disabled = b; $("#stop").disabled = !b; $("#all").disabled = b; render(); }
+$("#go").onclick = () => {
+  const targets = [...S[cur].sel.values()];
+  if (!S[cur].on) return alert("Log in first.");
+  if (!targets.length) return alert("Select at least one chat or server first.");
+  const dry = $("#dry").checked;
+  runMode = mode();
+  const act = targets.some((t) => t.kind === "activity");
+  if (act && !dry && !confirm(`Run on your Instagram account: ${targets.filter((t) => t.kind === "activity").map((t) => t.name).join("; ")}?\nThis permanently changes your account and cannot be undone.`)) return;
+  if (!dry && !act && !confirm(runMode === "reactions" ? `Remove ALL your reactions in ${targets.length} selected on ${NAME[cur]}? This cannot be undone.` : `Delete ALL your messages in ${targets.length} selected on ${NAME[cur]}? This cannot be undone.`)) return;
+  $("#log").textContent = ""; $("#stats").textContent = ""; $("#manualPrompt").textContent = ""; $("#manualPrompt").style.display = "none"; runP = cur; setBusy(true);
+  cleaner.start({ platform: cur, targets, opts: { mode: runMode, dryRun: dry, olderDays: $("#days").value, keyword: $("#kw").value } });
+};
+$("#stop").onclick = () => cleaner.stop();
+cleaner.onEvent((m) => {
+  if (m.type === "conn") { S[m.platform].on = m.connected; if (m.connected) { cur = m.platform; load(m.platform); } else S[m.platform].data = null; render(); }
+  else if (m.type === "log") log(m.text);
+  else if (m.type === "manual") { $("#manualPrompt").textContent = m.text; $("#manualPrompt").style.display = m.text ? "block" : "none"; }
+  else if (m.type === "scan") log("Scanning: " + m.text, "scan");
+  else if (m.type === "del") log((runMode === "reactions" ? "REMOVED: " : "DELETED: ") + m.text, "del");
+  else if (m.type === "target") $("#stats").dataset.t = m.text;
+  else if (m.type === "stats") $("#stats").textContent = `${$("#stats").dataset.t || ""} | ${m.deleted} ${$("#dry").checked ? "found" : "deleted"}, ${m.scanned} scanned`;
+  else if (m.type === "done") { log(`Done: ${m.deleted} ${m.dry ? "would be " + (runMode === "reactions" ? "removed" : "deleted") : (runMode === "reactions" ? "removed" : "deleted")} (${m.scanned} messages scanned).`); setBusy(false); }
+});
+cleaner.status().then((st) => { for (const p in st) { S[p].on = st[p]; if (st[p]) load(p); } render(); });
+</script>
